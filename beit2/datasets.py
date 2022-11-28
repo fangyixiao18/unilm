@@ -11,21 +11,22 @@
 # --------------------------------------------------------'
 import argparse
 import os
-import torch
 import random
 
+import torch
+from timm.data import ImageDataset, create_transform
+from timm.data.constants import (IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD,
+                                 IMAGENET_INCEPTION_MEAN,
+                                 IMAGENET_INCEPTION_STD)
 from torchvision import datasets, transforms
 
-from timm.data.constants import \
-    IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, IMAGENET_INCEPTION_MEAN, IMAGENET_INCEPTION_STD
-from transforms import RandomResizedCropAndInterpolationWithTwoPic, _pil_interp
-from timm.data import create_transform, ImageDataset 
-
-from masking_generator import MaskingGenerator
 from dataset_folder import ImageFolder
+from masking_generator import MaskingGenerator
+from transforms import RandomResizedCropAndInterpolationWithTwoPic, _pil_interp
 
 
 class DataAugmentationForBEiT(object):
+
     def __init__(self, args):
         imagenet_default_mean_and_std = args.imagenet_default_mean_and_std
         mean = IMAGENET_INCEPTION_MEAN if not imagenet_default_mean_and_std else IMAGENET_DEFAULT_MEAN
@@ -36,23 +37,27 @@ class DataAugmentationForBEiT(object):
             transforms.ColorJitter(0.4, 0.4, 0.4),
             transforms.RandomHorizontalFlip(p=0.5),
             RandomResizedCropAndInterpolationWithTwoPic(
-                size=args.input_size, second_size=args.second_input_size, scale=(args.min_crop_scale, 1.0),
-                interpolation=args.train_interpolation, second_interpolation=args.second_interpolation,
+                size=args.input_size,
+                second_size=args.second_input_size,
+                scale=(args.min_crop_scale, 1.0),
+                interpolation=args.train_interpolation,
+                second_interpolation=args.second_interpolation,
             ),
         ])
 
         self.patch_transform = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize(
-                mean=torch.tensor(mean),
-                std=torch.tensor(std))
+                mean=torch.tensor(mean), std=torch.tensor(std))
         ])
 
         self.visual_token_transform = transforms.Compose([
-            transforms.ToTensor(),])                                             
+            transforms.ToTensor(),
+        ])
 
         self.masked_position_generator = MaskingGenerator(
-            args.window_size, num_masking_patches=args.num_mask_patches,
+            args.window_size,
+            num_masking_patches=args.num_mask_patches,
             max_num_patches=args.max_mask_patches_per_block,
             min_num_patches=args.min_mask_patches_per_block,
         )
@@ -67,25 +72,36 @@ class DataAugmentationForBEiT(object):
         repr = "(DataAugmentationForBEiT,\n"
         repr += "  common_transform = %s,\n" % str(self.common_transform)
         repr += "  patch_transform = %s,\n" % str(self.patch_transform)
-        repr += "  visual_tokens_transform = %s,\n" % str(self.visual_token_transform)
-        repr += "  Masked position generator = %s,\n" % str(self.masked_position_generator)
+        repr += "  visual_tokens_transform = %s,\n" % str(
+            self.visual_token_transform)
+        repr += "  Masked position generator = %s,\n" % str(
+            self.masked_position_generator)
         repr += ")"
         return repr
+
 
 def build_beit_pretraining_dataset(args):
     transform = DataAugmentationForBEiT(args)
     print("Data Aug = %s" % str(transform))
-    
+
     return ImageFolder(args.data_path, transform=transform)
 
+
 ############################################### Dataset and Transforms for Tokenizer Training #########################################################
+
 
 def build_vqkd_dataset(is_train, args):
     if is_train:
         t = []
         if args.color_jitter > 0.:
-            t.append(transforms.ColorJitter(args.color_jitter, args.color_jitter, args.color_jitter))
-        t.append(transforms.RandomResizedCrop(args.input_size, scale=(args.min_crop_scale, 1.0), interpolation=_pil_interp(args.train_interpolation)))
+            t.append(
+                transforms.ColorJitter(args.color_jitter, args.color_jitter,
+                                       args.color_jitter))
+        t.append(
+            transforms.RandomResizedCrop(
+                args.input_size,
+                scale=(args.min_crop_scale, 1.0),
+                interpolation=_pil_interp(args.train_interpolation)))
         t.append(transforms.RandomHorizontalFlip(0.5))
         t.append(transforms.ToTensor())
         transform = transforms.Compose(t)
@@ -98,12 +114,14 @@ def build_vqkd_dataset(is_train, args):
             args.crop_pct = 1.0
         size = int(args.input_size / args.crop_pct)
         t.append(
-            transforms.Resize(size, interpolation=_pil_interp(args.train_interpolation)),  # to maintain same ratio w.r.t. 224 images
+            transforms.Resize(
+                size, interpolation=_pil_interp(args.train_interpolation)
+            ),  # to maintain same ratio w.r.t. 224 images
         )
         t.append(transforms.CenterCrop(args.input_size))
         t.append(transforms.ToTensor())
         transform = transforms.Compose(t)
-    
+
     print(f"{'Train' if is_train else 'Test'} Data Aug: {str(transform)}")
 
     if args.data_set == 'image_folder':
@@ -121,6 +139,7 @@ def build_vqkd_dataset(is_train, args):
 
 ############################################### Dataset and Transforms for Ft #########################################################
 
+
 def build_dataset(is_train, args):
     transform = build_transform(is_train, args)
 
@@ -136,7 +155,8 @@ def build_dataset(is_train, args):
     print("---------------------------")
 
     if args.data_set == 'CIFAR':
-        dataset = datasets.CIFAR100(args.data_path, train=is_train, transform=transform)
+        dataset = datasets.CIFAR100(
+            args.data_path, train=is_train, transform=transform)
         nb_classes = 100
     elif args.data_set == 'IMNET':
         root = os.path.join(args.data_path, 'train' if is_train else 'val')
@@ -192,7 +212,9 @@ def build_transform(is_train, args):
                 args.crop_pct = 1.0
         size = int(args.input_size / args.crop_pct)
         t.append(
-            transforms.Resize(size, interpolation=3),  # to maintain same ratio w.r.t. 224 images
+            transforms.Resize(
+                size,
+                interpolation=3),  # to maintain same ratio w.r.t. 224 images
         )
         t.append(transforms.CenterCrop(args.input_size))
 

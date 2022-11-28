@@ -11,9 +11,9 @@
 # https://github.com/facebookresearch/dino
 # --------------------------------------------------------'
 
-from cgitb import enable
 import math
 import sys
+from cgitb import enable
 from typing import Iterable
 
 import torch
@@ -22,31 +22,51 @@ import torch.nn.functional as F
 
 import utils
 
-def train_one_epoch(model: torch.nn.Module, vqkd: torch.nn.Module,
-                    data_loader: Iterable, optimizer: torch.optim.Optimizer,
-                    device: torch.device, epoch: int, loss_scaler, max_norm: float = 0,
-                    log_writer=None, lr_scheduler=None, start_steps=None,
-                    lr_schedule_values=None, wd_schedule_values=None, args=None):
+
+def train_one_epoch(model: torch.nn.Module,
+                    vqkd: torch.nn.Module,
+                    data_loader: Iterable,
+                    optimizer: torch.optim.Optimizer,
+                    device: torch.device,
+                    epoch: int,
+                    loss_scaler,
+                    max_norm: float = 0,
+                    log_writer=None,
+                    lr_scheduler=None,
+                    start_steps=None,
+                    lr_schedule_values=None,
+                    wd_schedule_values=None,
+                    args=None):
     model.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
-    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    metric_logger.add_meter('min_lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter(
+        'lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter(
+        'min_lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 10
 
     loss_fn = nn.CrossEntropyLoss()
 
-    for step, (batch, extra_info) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    for step, (batch, extra_info) in enumerate(
+            metric_logger.log_every(data_loader, print_freq, header)):
         # assign learning rate & weight decay for each step
         it = start_steps + step  # global training iteration
         if lr_schedule_values is not None or wd_schedule_values is not None:
             for i, param_group in enumerate(optimizer.param_groups):
                 if lr_schedule_values is not None:
-                    param_group["lr"] = lr_schedule_values[it] * param_group["lr_scale"]
-                if wd_schedule_values is not None and param_group["weight_decay"] > 0:
+                    param_group["lr"] = lr_schedule_values[it] * param_group[
+                        "lr_scale"]
+                if wd_schedule_values is not None and param_group[
+                        "weight_decay"] > 0:
                     param_group["weight_decay"] = wd_schedule_values[it]
 
         samples, images, bool_masked_pos = batch
+
+        samples = torch.ones((1, 3, 224, 224))
+        images = torch.ones((1, 3, 224, 224))
+        bool_masked_pos = torch.ones((1, 14, 14))
+
         images = images.to(device, non_blocking=True)
         samples = samples.to(device, non_blocking=True)
         bool_masked_pos = bool_masked_pos.to(device, non_blocking=True)
@@ -57,32 +77,38 @@ def train_one_epoch(model: torch.nn.Module, vqkd: torch.nn.Module,
             bool_masked_pos = bool_masked_pos.flatten(1).to(torch.bool)
             labels = input_ids[bool_masked_pos]
 
-        with torch.cuda.amp.autocast(): # enabled=False
+        with torch.cuda.amp.autocast():  # enabled=False
             outputs = model(samples, bool_masked_pos=bool_masked_pos)
 
             if isinstance(outputs, list):
                 loss_1 = loss_fn(input=outputs[0], target=labels)
                 loss_2 = loss_fn(input=outputs[1], target=labels)
-                loss = loss_1 + loss_2 
+                loss = loss_1 + loss_2
             else:
                 loss = loss_fn(input=outputs, target=labels)
-
 
         loss_value = loss.item()
 
         if not math.isfinite(loss_value):
-            print(f"Loss is {loss_value}, stopping training at rank {utils.get_rank()}", force=True)
+            print(
+                f"Loss is {loss_value}, stopping training at rank {utils.get_rank()}",
+                force=True)
             sys.exit(1)
 
         optimizer.zero_grad()
         # this attribute is added by timm on one optimizer (adahessian)
-        is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
-        grad_norm = loss_scaler(loss, optimizer, clip_grad=max_norm,
-                                parameters=model.parameters(), create_graph=is_second_order)
+        is_second_order = hasattr(
+            optimizer, 'is_second_order') and optimizer.is_second_order
+        grad_norm = loss_scaler(
+            loss,
+            optimizer,
+            clip_grad=max_norm,
+            parameters=model.parameters(),
+            create_graph=is_second_order)
         loss_scale_value = loss_scaler.state_dict()["scale"]
 
         torch.cuda.synchronize()
-        
+
         if isinstance(outputs, list):
             mlm_acc_1 = (outputs[0].max(-1)[1] == labels).float().mean().item()
             mlm_acc_2 = (outputs[1].max(-1)[1] == labels).float().mean().item()
@@ -135,4 +161,3 @@ def train_one_epoch(model: torch.nn.Module, vqkd: torch.nn.Module,
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-
